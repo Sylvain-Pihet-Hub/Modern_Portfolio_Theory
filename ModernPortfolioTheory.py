@@ -13,7 +13,7 @@ class HistoricalPerformance:
     def __init__(self, tickers: list[str] | None=None, df_prices: pd.DataFrame | None=None):
         self.tickers = tickers
         if tickers is not None:
-            self.prices = yf.download(self.tickers, period="3y", threads=False, progress=False)["Close"]
+            self.prices = yf.download(self.tickers, period="2y", threads=False, progress=False)["Close"]
         else:
             self.prices = df_prices
         self.prices.index = pd.to_datetime(self.prices.index, format="%d/%m/%Y")

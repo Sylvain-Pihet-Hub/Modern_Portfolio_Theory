@@ -13,7 +13,7 @@ from callbacks import register_callbacks
     #data[col] = ts
 #data = data.drop(columns=["MLoan SICAV S.A.", "Carlyle AlpInvest Private Markets Sub-Fund"])
 #import yfinance as yf
-tickers = ["TSLA", "PLTR", "GOOG", "AMZN", "CRWV", "^NDX", "MSFT", "COIN", "AMD"]
+tickers = ["TSLA", "PLTR", "GOOG", "AMZN", "CRWV", "^NDX", "MSFT", "COIN", "AMD", "NU"]
 #data = yf.download(tickers, period="10y", threads=False, progress=False)["Close"]
 
 app = Dash(__name__, suppress_callback_exceptions=True)
