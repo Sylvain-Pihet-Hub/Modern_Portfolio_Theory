@@ -133,7 +133,8 @@ def register_callbacks(app, tickers: list[str] | None=None, df_prices: pd.DataFr
             tickers = selected_funds
             portfolio = PortfolioOptimisation(tickers=tickers, objective=objective, frequency=frequency, covariance_type=covariance_type, min_weight=min_weight, max_weight=max_weight, view_returns_dict=view_returns_dict)
 
-        (ef_returns, ef_vols, _), optimised_portfolio_return, optimised_portfolio_vol, optimised_weights = portfolio.efficient_frontier
+        ef_returns, ef_vols, ef_sharpe_ratios = portfolio.efficient_frontier
+        optimised_portfolio_return, optimised_portfolio_vol, optimised_weights = portfolio.calculate_optimised_portfolio(returns_vector=portfolio.returns_vector, covariance_matrix=portfolio.covariance_matrix, objective=objective)
         mc_returns, mc_vols, _ = portfolio.simulate_random_portfolio()
         fig = go.Figure()
 
@@ -231,7 +232,7 @@ def register_callbacks(app, tickers: list[str] | None=None, df_prices: pd.DataFr
         else:
             tickers = selected_funds
             portfolio = PortfolioOptimisation(tickers=tickers, objective=objective, frequency=frequency, covariance_type=covariance_type, min_weight=min_weight, max_weight=max_weight, view_returns_dict=view_returns_dict)
-        efficient_frontier, optimised_portfolio_return, optimised_portfolio_vol, optimised_weights = portfolio.efficient_frontier
+        optimised_portfolio_return, optimised_portfolio_vol, optimised_weights = portfolio.calculate_optimised_portfolio(returns_vector=portfolio.returns_vector, covariance_matrix=portfolio.covariance_matrix, objective=objective)
 
         # Convert to dataframe (handle both array or Series)
         weights_df = pd.DataFrame({"Fund": selected_funds, "Weight": optimised_weights})
@@ -291,7 +292,7 @@ def register_callbacks(app, tickers: list[str] | None=None, df_prices: pd.DataFr
         else:
             tickers = selected_funds
             portfolio = PortfolioOptimisation(tickers=tickers, objective=objective, frequency=frequency, covariance_type=covariance_type, min_weight=min_weight, max_weight=max_weight, view_returns_dict=view_returns_dict)
-        efficient_frontier, optimised_portfolio_return, optimised_portfolio_vol, optimised_weights = portfolio.efficient_frontier
+        optimised_portfolio_return, optimised_portfolio_vol, optimised_weights = portfolio.calculate_optimised_portfolio(returns_vector=portfolio.returns_vector, covariance_matrix=portfolio.covariance_matrix, objective=objective)
 
         optimised_weights = np.array(optimised_weights)
 
