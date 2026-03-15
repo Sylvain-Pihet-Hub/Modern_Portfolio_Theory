@@ -105,18 +105,33 @@ def register_callbacks(app, tickers: list[str] | None=None, df_prices: pd.DataFr
         return children
 
     @app.callback(
-        Output("efficient-frontier-graph", "figure"),
-        Input("run-optimisation", "n_clicks"),
-        State("basket-store", "data"),
-        State("objective-function", "value"),
-        State("covariance-type", "value"),
-        State("min-weight", "value"),
-        State("max-weight", "value"),
-        State("expected-returns-type", "value"),
-        State({"type": "bl-views-input", "index": ALL}, "value"),
-        prevent_initial_call=True)
+        Output("risk-aversion-container", "style"),
+        Input("objective-function", "value"))
 
-    def run_efficient_frontier(click, selected_funds, objective, covariance_type, min_weight, max_weight, selected_returns_option, bl_views):
+    def toggle_risk_aversion_slider(objective):
+        if objective == "utility_function":
+            return {"display": "block", "marginTop": "10px"}
+        return {"display": "none"}
+
+    @app.callback(
+        Output("target-weights-container", "children"),
+        Input("benchmark-type", "value"),
+        State("basket-store", "data"))
+
+    def generate_target_weights(benchmark_type, selected_funds):
+
+        if benchmark_type != "target" or not selected_funds:
+            return []
+
+        return [
+            html.Div([
+                html.Label(fund),
+                dcc.Input(id={"type": "target-weight-input", "index": fund}, type="number", min=0, max=1, step=0.01, placeholder="Weight")
+            ])
+            for fund in selected_funds
+        ]
+
+    def generate_portfolio(selected_funds, objective, covariance_type, min_weight, max_weight, risk_free_rate, selected_returns_option, bl_views):
         if not selected_funds or len(selected_funds) < 2:
             return go.Figure()
 
@@ -128,13 +143,42 @@ def register_callbacks(app, tickers: list[str] | None=None, df_prices: pd.DataFr
 
         if df_prices is not None:
             prices = df_prices[selected_funds]
-            portfolio = PortfolioOptimisation(df_prices=prices, objective=objective, frequency=frequency, covariance_type=covariance_type, min_weight=min_weight, max_weight=max_weight, view_returns_dict=view_returns_dict)
+            portfolio = PortfolioOptimisation(df_prices=prices, objective=objective, frequency=frequency, covariance_type=covariance_type, min_weight=min_weight, max_weight=max_weight, view_returns_dict=view_returns_dict, risk_free_rate=risk_free_rate)
         else:
             tickers = selected_funds
-            portfolio = PortfolioOptimisation(tickers=tickers, objective=objective, frequency=frequency, covariance_type=covariance_type, min_weight=min_weight, max_weight=max_weight, view_returns_dict=view_returns_dict)
+            portfolio = PortfolioOptimisation(tickers=tickers, objective=objective, frequency=frequency, covariance_type=covariance_type, min_weight=min_weight, max_weight=max_weight, view_returns_dict=view_returns_dict, risk_free_rate=risk_free_rate)
+        return portfolio
 
-        ef_returns, ef_vols, ef_sharpe_ratios = portfolio.efficient_frontier
-        optimised_portfolio_return, optimised_portfolio_vol, optimised_weights = portfolio.calculate_optimised_portfolio(returns_vector=portfolio.returns_vector, covariance_matrix=portfolio.covariance_matrix, objective=objective)
+    def calculate_benchmark_weights(selected_funds, target_weights):
+        benchmark_weights = None
+        if target_weights and any(w is not None for w in target_weights):
+            weights = np.array([w if w is not None else 0 for w in target_weights])
+            if weights.sum() > 0:
+                benchmark_weights = weights / weights.sum()
+
+        if benchmark_weights is None:
+            benchmark_weights = np.ones(len(selected_funds)) / len(selected_funds)
+        return benchmark_weights
+
+    @app.callback(
+        Output("efficient-frontier-graph", "figure"),
+        Input("run-optimisation", "n_clicks"),
+        State("basket-store", "data"),
+        State("objective-function", "value"),
+        State("covariance-type", "value"),
+        State("min-weight", "value"),
+        State("max-weight", "value"),
+        State("risk-free-rate", "value"),
+        State("risk-aversion-slider", "value"),
+        State("expected-returns-type", "value"),
+        State({"type": "bl-views-input", "index": ALL}, "value"),
+        prevent_initial_call=True)
+
+    def run_efficient_frontier(click, selected_funds, objective, covariance_type, min_weight, max_weight, risk_free_rate, risk_aversion, selected_returns_option, bl_views):
+        portfolio = generate_portfolio(selected_funds=selected_funds, objective=objective, covariance_type=covariance_type, min_weight=min_weight, max_weight=max_weight, risk_free_rate=risk_free_rate, selected_returns_option=selected_returns_option, bl_views=bl_views)
+
+        optimised_returns, optimised_vols, sharpe_ratios = portfolio.efficient_frontier
+        optimised_portfolio_return, optimised_portfolio_vol, optimised_weights = portfolio.calculate_optimised_portfolio(returns_vector=portfolio.returns_vector, covariance_matrix=portfolio.covariance_matrix, objective=portfolio.objective, risk_aversion=risk_aversion)
         mc_returns, mc_vols, _ = portfolio.simulate_random_portfolio()
         fig = go.Figure()
 
@@ -147,11 +191,11 @@ def register_callbacks(app, tickers: list[str] | None=None, df_prices: pd.DataFr
         ))
 
         fig.add_trace(go.Scatter(
-            x=ef_vols, y=ef_returns, mode="lines+markers", name="Efficient Frontier"
+            x=optimised_vols, y=optimised_returns, mode="lines+markers", name="Efficient Frontier"
         ))
         fig.add_trace(go.Scatter(
             x=[optimised_portfolio_vol], y=[optimised_portfolio_return],
-            mode="markers", name="Max Sharpe",
+            mode="markers", name=objective,
             marker=dict(size=10, symbol="star")
         ))
         fig.update_layout(xaxis_title="Volatility", yaxis_title="Expected Return", template="plotly_white", paper_bgcolor="#F0F0F0", plot_bgcolor="#F0F0F0")
@@ -161,29 +205,17 @@ def register_callbacks(app, tickers: list[str] | None=None, df_prices: pd.DataFr
         Output("correlation-heatmap", "figure"),
         Input("run-optimisation", "n_clicks"),
         State("basket-store", "data"),
+        State("objective-function", "value"),
         State("covariance-type", "value"),
         State("min-weight", "value"),
         State("max-weight", "value"),
+        State("risk-free-rate", "value"),
         State("expected-returns-type", "value"),
         State({"type": "bl-views-input", "index": ALL}, "value"),
         prevent_initial_call=True)
 
-    def run_correlation_matrix(click, selected_funds, covariance_type, min_weight, max_weight, selected_returns_option, bl_views):
-        if not selected_funds or len(selected_funds) < 2:
-            return go.Figure()
-
-        view_returns_dict = None
-        if selected_returns_option == "black_litterman":
-            if not selected_funds or not bl_views:
-                return go.Figure()
-            view_returns_dict = {fund: expected_return for fund, expected_return in zip(selected_funds, bl_views)}
-
-        if df_prices is not None:
-            prices = df_prices[selected_funds]
-            portfolio = PortfolioOptimisation(df_prices=prices, frequency=frequency, covariance_type=covariance_type, min_weight=min_weight, max_weight=max_weight, view_returns_dict=view_returns_dict)
-        else:
-            tickers = selected_funds
-            portfolio = PortfolioOptimisation(tickers=tickers, frequency=frequency, covariance_type=covariance_type, min_weight=min_weight, max_weight=max_weight, view_returns_dict=view_returns_dict)
+    def run_correlation_matrix(click, selected_funds, objective, covariance_type, min_weight, max_weight, risk_free_rate, selected_returns_option, bl_views):
+        portfolio = generate_portfolio(selected_funds=selected_funds, objective=objective, covariance_type=covariance_type, min_weight=min_weight, max_weight=max_weight, risk_free_rate=risk_free_rate, selected_returns_option=selected_returns_option, bl_views=bl_views)
         covariance_matrix = portfolio.covariance_matrix
         corr_matrix = covariance_matrix / np.outer(np.sqrt(np.diag(covariance_matrix)), np.sqrt(np.diag(covariance_matrix)))
 
@@ -212,52 +244,47 @@ def register_callbacks(app, tickers: list[str] | None=None, df_prices: pd.DataFr
         State("covariance-type", "value"),
         State("min-weight", "value"),
         State("max-weight", "value"),
+        State("risk-free-rate", "value"),
+        State("risk-aversion-slider", "value"),
         State("expected-returns-type", "value"),
+        State({"type": "target-weight-input", "index": ALL}, "value"),
         State({"type": "bl-views-input", "index": ALL}, "value"),
         prevent_initial_call=True)
 
-    def create_optimised_weights_table(n_clicks, selected_funds, objective, covariance_type, min_weight, max_weight, selected_returns_option, bl_views):
-        if not selected_funds or len(selected_funds) < 2:
-            return "No portfolio computed"
+    def create_optimised_weights_table(n_clicks, selected_funds, objective, covariance_type, min_weight, max_weight, risk_free_rate, risk_aversion, selected_returns_option, target_weights, bl_views):
+        portfolio = generate_portfolio(selected_funds=selected_funds, objective=objective, covariance_type=covariance_type, min_weight=min_weight, max_weight=max_weight, risk_free_rate=risk_free_rate, selected_returns_option=selected_returns_option, bl_views=bl_views)
 
-        view_returns_dict = None
-        if selected_returns_option == "black_litterman":
-            if not selected_funds or not bl_views:
-                return go.Figure()
-            view_returns_dict = {fund: expected_return for fund, expected_return in zip(selected_funds, bl_views)}
+        optimised_portfolio_return, optimised_portfolio_vol, optimised_weights = portfolio.calculate_optimised_portfolio(returns_vector=portfolio.returns_vector, covariance_matrix=portfolio.covariance_matrix, objective=portfolio.objective, risk_aversion=risk_aversion)
 
-        if df_prices is not None:
-            prices = df_prices[selected_funds]
-            portfolio = PortfolioOptimisation(df_prices=prices, objective=objective, frequency=frequency, covariance_type=covariance_type, min_weight=min_weight, max_weight=max_weight, view_returns_dict=view_returns_dict)
-        else:
-            tickers = selected_funds
-            portfolio = PortfolioOptimisation(tickers=tickers, objective=objective, frequency=frequency, covariance_type=covariance_type, min_weight=min_weight, max_weight=max_weight, view_returns_dict=view_returns_dict)
-        optimised_portfolio_return, optimised_portfolio_vol, optimised_weights = portfolio.calculate_optimised_portfolio(returns_vector=portfolio.returns_vector, covariance_matrix=portfolio.covariance_matrix, objective=objective)
+        benchmark_weights = calculate_benchmark_weights(selected_funds=selected_funds, target_weights=target_weights)
+        benchmark_weights_return = benchmark_weights @ portfolio.returns_vector
+        benchmark_weights_vol = np.sqrt(benchmark_weights.T @ portfolio.covariance_matrix @ benchmark_weights)
 
         # Convert to dataframe (handle both array or Series)
-        weights_df = pd.DataFrame({"Fund": selected_funds, "Weight": optimised_weights})
-        weights_df["Weight"] = (weights_df["Weight"] * 100).round(2)
+        weights_df = pd.DataFrame({"Fund": selected_funds, "Optimised_Weight": (100 * optimised_weights).round(2), "Benchmark_Weight": (benchmark_weights * 100).round(2)})
 
         sharpe_ratio = round(optimised_portfolio_return / optimised_portfolio_vol, 2)
-        metrics_df = pd.DataFrame({"Metric": ["Expected Return (%)", "Volatility (%)", "Sharpe Ratio"], "Value": [round(optimised_portfolio_return * 100, 2), round(optimised_portfolio_vol * 100, 2), sharpe_ratio]})
+        metrics_df = pd.DataFrame({"Metric": ["Expected Return (%)", "Volatility (%)", "Sharpe Ratio"],
+                                   "Optimised_Portfolio": [round(optimised_portfolio_return * 100, 2), round(optimised_portfolio_vol * 100, 2), sharpe_ratio],
+                                   "Benchmark_Weight_Portfolio": [round(benchmark_weights_return * 100, 2), round(benchmark_weights_vol * 100, 2), round(benchmark_weights_return / benchmark_weights_vol, 2)]})
 
         return html.Table(
             [
                 html.Thead(
-                    html.Tr([html.Th("Fund"), html.Th("Weight (%)")])
+                    html.Tr([html.Th("Fund"), html.Th("Optimised Weights (%)"), html.Th("Benchmark Weights (%)")])
                 ),
                 html.Tbody([
-                    html.Tr([html.Td(row["Fund"]), html.Td(f"{row['Weight']}%")])
+                    html.Tr([html.Td(row["Fund"]), html.Td(f"{row['Optimised_Weight']}%"), html.Td(f"{row['Benchmark_Weight']}%")])
                     for _, row in weights_df.iterrows()
                 ]),
                 html.Tbody([
                     html.Tr([html.Td(colSpan=2, children=html.Hr(style={"margin": "8px 0"}))])
                 ]),
                 html.Tbody([
-                    html.Tr([html.Th("Metric"), html.Th("Value")])
+                    html.Tr([html.Th("Metric"), html.Th("Optimised Portfolio"), html.Th("Benchmark Weight Portfolio")])
                 ]),
                 html.Tbody([
-                    html.Tr([html.Td(row["Metric"]), html.Td(row["Value"])])
+                    html.Tr([html.Td(row["Metric"]), html.Td(row["Optimised_Portfolio"]), html.Td(row["Benchmark_Weight_Portfolio"])])
                     for _, row in metrics_df.iterrows()
                 ])
             ],
@@ -272,36 +299,29 @@ def register_callbacks(app, tickers: list[str] | None=None, df_prices: pd.DataFr
         State("covariance-type", "value"),
         State("min-weight", "value"),
         State("max-weight", "value"),
+        State("risk-free-rate", "value"),
+        State("risk-aversion-slider", "value"),
         State("expected-returns-type", "value"),
+        State({"type": "target-weight-input", "index": ALL}, "value"),
         State({"type": "bl-views-input", "index": ALL}, "value"),
         prevent_initial_call=True)
 
-    def plot_nav_comparison(n_clicks, selected_funds, objective, covariance_type, min_weight, max_weight, selected_returns_option, bl_views):
-        if not selected_funds or len(selected_funds) < 2:
-            return go.Figure()
+    def plot_nav_comparison(n_clicks, selected_funds, objective, covariance_type, min_weight, max_weight, risk_free_rate, risk_aversion, selected_returns_option, target_weights, bl_views):
+        portfolio = generate_portfolio(selected_funds=selected_funds, objective=objective, covariance_type=covariance_type, min_weight=min_weight, max_weight=max_weight, risk_free_rate=risk_free_rate, selected_returns_option=selected_returns_option, bl_views=bl_views)
 
-        view_returns_dict = None
-        if selected_returns_option == "black_litterman":
-            if not selected_funds or not bl_views:
-                return go.Figure()
-            view_returns_dict = {fund: expected_return for fund, expected_return in zip(selected_funds, bl_views)}
-
-        if df_prices is not None:
-            prices = df_prices[selected_funds].copy().dropna()
-            portfolio = PortfolioOptimisation(df_prices=prices, objective=objective, frequency=frequency, covariance_type=covariance_type, min_weight=min_weight, max_weight=max_weight, view_returns_dict=view_returns_dict)
-        else:
-            tickers = selected_funds
-            portfolio = PortfolioOptimisation(tickers=tickers, objective=objective, frequency=frequency, covariance_type=covariance_type, min_weight=min_weight, max_weight=max_weight, view_returns_dict=view_returns_dict)
-        optimised_portfolio_return, optimised_portfolio_vol, optimised_weights = portfolio.calculate_optimised_portfolio(returns_vector=portfolio.returns_vector, covariance_matrix=portfolio.covariance_matrix, objective=objective)
-
+        optimised_weights = portfolio.calculate_optimised_portfolio(returns_vector=portfolio.returns_vector, covariance_matrix=portfolio.covariance_matrix, objective=portfolio.objective, risk_aversion=risk_aversion)[2]
         optimised_weights = np.array(optimised_weights)
 
-        nav = portfolio.prices / portfolio.prices.iloc[0] * 100
+        benchmark_weights = calculate_benchmark_weights(selected_funds=selected_funds, target_weights=target_weights)
+
+        nav = portfolio.prices.dropna() / portfolio.prices.dropna().iloc[0] * 100
         portfolio_nav = nav @ optimised_weights
+        benchmark_weight_nav = nav @ benchmark_weights
         fig = go.Figure()
         for fund in nav.columns:
             fig.add_trace(go.Scatter(x=nav.index, y=nav[fund], mode="lines", name=fund, opacity=0.3, line=dict(width=2)))
 
+        fig.add_trace(go.Scatter(x=benchmark_weight_nav.index, y=benchmark_weight_nav, mode="lines", name="Benchmark Portfolio", line=dict(width=3, dash="dash", color="black")))
         fig.add_trace(go.Scatter(x=portfolio_nav.index, y=portfolio_nav, mode="lines", name="Optimised Portfolio", line=dict(width=4, color="black")))
         fig.update_layout(xaxis_title="Date", yaxis_title="Indexed NAV (Base = 100)", paper_bgcolor="#F0F0F0", plot_bgcolor="#F0F0F0", legend=dict(orientation="h"), height=500)
 

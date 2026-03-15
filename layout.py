@@ -132,8 +132,23 @@ def create_page2_layout():
                     html.Label("Objective"),
                     dcc.RadioItems(
                         id="objective-function",
-                        options=[{"label": "Min Volatility", "value": "volatility"}, {"label": "Max Sharpe Ratio", "value": "sharpe_ratio"}],
+                        options=[{"label": "Min Volatility", "value": "volatility"}, {"label": "Max Sharpe Ratio", "value": "sharpe_ratio"}, {"label": "Max Utility Function", "value": "utility_function"}],
                         value="volatility"
+                    ),
+                    html.Div(
+                        id="risk-aversion-container",
+                        style={"display": "none"},  # hidden by default
+                        children=[
+                            html.Label("Risk Aversion (λ)"),
+                            dcc.Slider(
+                                id="risk-aversion-slider",
+                                min=0.1,
+                                max=10,
+                                step=0.1,
+                                value=1,
+                                marks={0.1: "0.1", 1: "1", 3: "3", 5: "5", 10: "10"},
+                                tooltip={"placement": "bottom", "always_visible": True}),
+                        ],
                     ),
                     html.Br(),
                     html.Label("Covariance Matrix Type"),
@@ -163,6 +178,20 @@ def create_page2_layout():
                         ]
                     ),
                     html.Div(id="bl-views-container"),
+
+                    html.H4("Benchmark Portfolio"),
+                    html.Div(
+                        style={"marginBottom": "15px"},
+                        children=[
+                            dcc.RadioItems(
+                                id="benchmark-type",
+                                options=[{"label": "Equal Weight", "value": "equal"}, {"label": "Target Weights", "value": "target"}],
+                                value="equal",
+                                labelStyle={"display": "block", "marginBottom": "4px"}
+                            )
+                        ]
+                    ),
+                    html.Div(id="target-weights-container"),
                     html.Button("Run Optimisation", id="run-optimisation", n_clicks=0, style={"margin-top": "20px"})
 
                 ]

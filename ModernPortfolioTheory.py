@@ -1,5 +1,4 @@
 import pandas as pd
-import polars as pl
 import numpy as np
 import yfinance as yf
 from pypfopt import risk_models, expected_returns, EfficientFrontier, CLA
@@ -20,7 +19,7 @@ class HistoricalPerformance:
 
 class PortfolioOptimisation(HistoricalPerformance):
     def __init__(self, tickers: list[str] | None=None, df_prices: pd.DataFrame | None=None, objective: str="volatility", frequency: int=12, covariance_type: str="sample_covariance",
-                 min_weight: float=0.0, max_weight: float=1.0, view_returns_dict: dict[str, float]=None):
+                 min_weight: float=0.0, max_weight: float=1.0, view_returns_dict: dict[str, float]=None, risk_free_rate: float=0.0):
         super().__init__(tickers, df_prices)
         self.objective = objective
         self.frequency = frequency
@@ -28,9 +27,10 @@ class PortfolioOptimisation(HistoricalPerformance):
         self.min_weight = min_weight
         self.max_weight = max_weight
         self.view_returns_dict = view_returns_dict
+        self.risk_free_rate = risk_free_rate
         self.covariance_matrix = self.calculate_covariance_matrix()
         self.returns_vector = self.calculate_mean_historical_returns() if self.view_returns_dict is None else self.generate_expected_returns_with_black_litterman()
-        self.efficient_frontier = self.calculate_efficient_frontier(self.returns_vector, self.covariance_matrix, self.objective)
+        self.efficient_frontier = self.calculate_efficient_frontier(returns_vector=self.returns_vector,covariance_matrix=self.covariance_matrix, objective=self.objective)
 
     def calculate_mean_historical_returns(self):
         mean_returns = expected_returns.mean_historical_return(self.prices, frequency=self.frequency)
@@ -45,39 +45,36 @@ class PortfolioOptimisation(HistoricalPerformance):
             raise ValueError("Invalid covariance type")
         return covariance_matrix
 
-    def calculate_efficient_frontier(self, returns_vector: pd.Series, covariance_matrix: pd.DataFrame, objective: str, n_points: int = 100):
+    def calculate_efficient_frontier(self, returns_vector: pd.Series, covariance_matrix: pd.DataFrame, objective: str, n_points: int=100):
         ef = EfficientFrontier(expected_returns=returns_vector, cov_matrix=covariance_matrix, weight_bounds=(self.min_weight, self.max_weight))
         ef_temporary = ef.deepcopy()
         frontier_returns, frontier_vols, sharpe_ratios = [], [], []
         if objective == "volatility":
-            ef_temporary.max_sharpe()
-            max_return = ef_temporary.portfolio_performance()[0]
-            target_returns = np.linspace(start=min(returns_vector), stop=max_return*0.99, num=n_points)
+            target_returns = np.linspace(start=min(returns_vector), stop=ef_temporary._max_return()*0.98, num=n_points)
             for target_return in target_returns:
-                ef.efficient_return(target_return=target_return)  # give the optimised weights
+                ef.efficient_return(target_return=target_return) # give the optimised weights
                 optimised_portfolio_return, optimised_portfolio_vol, sharpe_ratio = ef.portfolio_performance()
                 if optimised_portfolio_vol not in frontier_vols:
                     frontier_returns.append(optimised_portfolio_return)
                     frontier_vols.append(optimised_portfolio_vol)
                     sharpe_ratios.append(sharpe_ratio)
 
-        elif objective == "sharpe_ratio":
+        elif objective in ["sharpe_ratio", "utility_function"]:
             ef_temporary.min_volatility()
             min_vol = ef_temporary.portfolio_performance()[1]
-            print(f"Min Vol: {min_vol}", f"Upper Min Vol {1.001 * min_vol}")
-            target_vols = np.linspace(start=min_vol * 1.01, stop=min_vol * 3, num=n_points)
+            target_vols = np.linspace(start=min_vol*1.01, stop=min_vol*3, num=n_points)
             for target_vol in target_vols:
-                ef.efficient_risk(target_volatility=target_vol)  # give the optimised weights
-                optimised_portfolio_return, optimised_portfolio_vol, sharpe_ratio = ef.portfolio_performance()
+                ef.efficient_risk(target_volatility=target_vol) # give the optimised weights
+                optimised_portfolio_return, optimised_portfolio_vol, sharpe_ratio = ef.portfolio_performance(risk_free_rate=self.risk_free_rate)
                 frontier_returns.append(optimised_portfolio_return)
                 frontier_vols.append(optimised_portfolio_vol)
                 sharpe_ratios.append(sharpe_ratio)
         else:
-            raise ValueError("Objective has to be Returns or Volatility")
+            raise ValueError("Objective has to be Max Sharpe Ratio, Min Volatility, or Max Utility Function")
 
         return frontier_returns, frontier_vols, sharpe_ratios
 
-    def calculate_efficient_frontier_with_cla(self, returns_vector: pd.Series, covariance_matrix: pd.DataFrame, objective: str):
+    def calculate_efficient_frontier_with_cla(self, returns_vector: pd.Series, covariance_matrix: pd.DataFrame, objective: str, risk_free_rate: float=0.0):
         cla = CLA(expected_returns=returns_vector, cov_matrix=covariance_matrix, weight_bounds=(self.min_weight, self.max_weight))
         if objective == "volatility":
             cla.min_volatility()
@@ -87,22 +84,26 @@ class PortfolioOptimisation(HistoricalPerformance):
             raise ValueError("Objective has to be Returns or Volatility")
         efficient_frontier = cla.efficient_frontier()
 
-        optimised_portfolio_return = cla.portfolio_performance()[0]
-        optimised_portfolio_vol = cla.portfolio_performance()[1]
+        optimised_portfolio_return = cla.portfolio_performance(risk_free_rate=risk_free_rate)[0]
+        optimised_portfolio_vol = cla.portfolio_performance(risk_free_rate=risk_free_rate)[1]
         optimised_weights = cla.weights
         return efficient_frontier, optimised_portfolio_return, optimised_portfolio_vol, optimised_weights
 
-    def calculate_optimised_portfolio(self, returns_vector: pd.Series, covariance_matrix: pd.DataFrame, objective: str):
+    def calculate_optimised_portfolio(self, returns_vector: pd.Series, covariance_matrix: pd.DataFrame, objective: str, risk_aversion: float):
         ef = EfficientFrontier(expected_returns=returns_vector, cov_matrix=covariance_matrix, weight_bounds=(self.min_weight, self.max_weight))
         if objective == "volatility":
             ef.min_volatility()
         elif objective == "sharpe_ratio":
-            ef.max_sharpe()
+            ef.max_sharpe(risk_free_rate=self.risk_free_rate)
+        elif objective == "utility_function":
+            scaling_factor = np.mean(returns_vector) / np.mean(np.diag(covariance_matrix))
+            effective_lambda = risk_aversion * scaling_factor
+            ef.max_quadratic_utility(risk_aversion=effective_lambda)
         else:
-            raise ValueError("Objective has to be Returns or Volatility")
+            raise ValueError("Objective has to be Max Sharpe Ratio, Min Volatility, or Max Utility Function")
 
-        optimised_portfolio_return = ef.portfolio_performance()[0]
-        optimised_portfolio_vol = ef.portfolio_performance()[1]
+        optimised_portfolio_return = ef.portfolio_performance(risk_free_rate=self.risk_free_rate)[0]
+        optimised_portfolio_vol = ef.portfolio_performance(risk_free_rate=self.risk_free_rate)[1]
         optimised_weights = ef.weights
         return optimised_portfolio_return, optimised_portfolio_vol, optimised_weights
 
