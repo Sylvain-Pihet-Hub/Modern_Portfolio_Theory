@@ -140,6 +140,45 @@ class PortfolioOptimisation(HistoricalPerformance):
     def calculate_sortino_ratio(self):
         pass
 
+class PCA:
+
+    def __init__(self, prices, log_returns: bool=False):
+        self.prices = prices
+        self.returns = expected_returns.returns_from_prices(self.prices, log_returns=log_returns)
+
+    def normalise_returns(self):
+        returns = np.array(self.returns)
+        mean_returns = np.nansum(returns, axis=0) / np.sum(~np.isnan(returns), axis=0)
+        covariance_matrix = np.cov(returns, rowvar=False)
+        std = np.sqrt(np.diag(covariance_matrix))
+        normalised_returns = (returns - mean_returns) / std
+        return normalised_returns, mean_returns, std
+
+    def calculate_normalised_covariance(self):
+        normalised_returns = self.normalise_returns()[0]
+        normalised_covariance = normalised_returns.T @ normalised_returns / (normalised_returns.shape[0] - 1)
+        return normalised_covariance
+
+    def calculate_eigenvalues_and_eigenvectors(self):
+        normalised_covariance = self.calculate_normalised_covariance()
+        eigenvalues, eigenvectors = np.linalg.eig(normalised_covariance)
+        sorted_index = np.argsort(eigenvalues)[::-1]
+        eigenvalues, eigenvectors = eigenvalues[sorted_index], eigenvectors[:, sorted_index]
+        return eigenvalues, eigenvectors
+
+    def calculate_projection_matrix(self, num_components: int):
+        eigenvalues, eigenvectors = self.calculate_eigenvalues_and_eigenvectors()
+        principal_values = np.real(eigenvalues[: num_components])
+        principal_components = np.real(eigenvectors[:, :num_components])
+        projection = principal_components @ np.linalg.inv(principal_components.T @ principal_components) @ principal_components.T
+        return projection, principal_components, principal_values
+
+    def pca(self, num_components: int):
+        projection, principal_components, principal_values = self.calculate_projection_matrix(num_components)
+        normalised_returns, mean_returns, std_returns = self.normalise_returns()
+        reconstruct = (projection @ normalised_returns.T).T * std_returns + mean_returns
+        return reconstruct, principal_components, principal_values
+
 class Visualisation(PortfolioOptimisation):
 
     def __init__(self, tickers: list[str] | None=None, df_prices: pd.DataFrame | None=None, objective: str="volatility", frequency: int=12, covariance_type: str="sample_covariance"):
